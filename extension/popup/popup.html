@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cwtch</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="brand"><img src="../assets/logo.svg" alt=""><div><h1>Cwtch</h1><p>Watch parties for two</p></div><button id="settings" class="icon" aria-label="Settings">⚙</button></header>
+    <section id="loading" class="card centered"><div class="spinner"></div><p>Finding the player…</p></section>
+    <section id="unavailable" class="card hidden"><span class="kicker">Not ready here</span><h2>Open something worth sharing.</h2><p id="unavailable-copy">Cwtch works on Netflix, Prime Video, and YouTube watch pages.</p><button id="retry" class="secondary full">Check again</button></section>
+    <section id="idle" class="hidden">
+      <div class="card">
+        <span class="kicker" id="platform-label">Ready</span><h2 id="video-title">Tonight’s watch</h2>
+        <label>Your name<input id="display-name" maxlength="40" autocomplete="nickname" placeholder="What should your person see?"></label>
+        <label>Room name<input id="room-name" maxlength="50" value="Tonight" placeholder="Tonight"></label>
+        <button id="create" class="primary full">Create a room</button>
+        <p class="fine">The invite contains the room key. Send it only to your person.</p>
+      </div>
+      <div class="divider"><span>or join them</span></div>
+      <div class="card compact"><label>Invite link<textarea id="invite" rows="3" placeholder="Paste the complete Cwtch link"></textarea></label><button id="join" class="secondary full">Join room</button></div>
+    </section>
+    <section id="active" class="hidden">
+      <div class="card room-card"><div class="status"><span id="status-dot"></span><span id="status-text">Connecting…</span><small id="occupants">1/2</small></div><span class="kicker" id="active-platform">Room</span><h2 id="active-room">Tonight</h2><p id="active-title"></p><div class="pair"><div id="self-label">You</div><span>♡</span><div id="partner-label">Waiting…</div></div><button id="open-panel" class="primary full">Open Cwtch</button><div class="two"><button id="copy" class="secondary">Copy invite</button><button id="resync" class="secondary">Resync</button></div><button id="leave" class="quiet-danger">Leave this room</button></div>
+    </section>
+    <section id="issue" class="issue hidden"><strong id="issue-code"></strong><p id="issue-message"></p><small id="issue-fix"></small><button id="diagnose" class="text-button">Open Fixes</button></section>
+    <div id="toast" class="toast" role="status"></div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

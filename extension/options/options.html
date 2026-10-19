@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cwtch settings</title><link rel="stylesheet" href="options.css"></head>
+<body>
+  <main class="page">
+    <header><img src="../assets/logo.svg" alt=""><div><span class="eyebrow">Cwtch</span><h1>Keep the room dependable.</h1><p>These settings are local to this Chrome profile. Room messages are encrypted before they reach the relay.</p></div></header>
+    <section class="card">
+      <h2>Room relay</h2><p class="help">Use <code>ws://localhost:8787/ws</code> while developing. Public HTTPS use requires a TLS-enabled <code>wss://</code> address.</p>
+      <label>WebSocket relay URL<input id="relay-url" spellcheck="false" autocomplete="url"></label>
+      <div class="health"><span id="health-dot"></span><div><strong id="health-title">Not checked</strong><small id="health-detail">Run a health check after changing the URL.</small></div><button id="health-check" class="secondary">Check relay</button></div>
+    </section>
+    <section class="card"><h2>Your side of the room</h2><label>Display name<input id="display-name" maxlength="40" autocomplete="nickname"></label><div class="toggles"><label class="toggle"><input id="auto-open" type="checkbox"><span></span><div><strong>Open Cwtch when joining</strong><small>Bring the room panel forward after an invite opens.</small></div></label><label class="toggle"><input id="soft-sync" type="checkbox"><span></span><div><strong>Gentle drift correction</strong><small>Use tiny temporary speed changes before making a visible seek.</small></div></label><label class="toggle"><input id="nudge-sound" type="checkbox"><span></span><div><strong>Quiet nudge sound</strong><small>Play a brief tone when your person sends “I’m here.”</small></div></label><label class="toggle"><input id="auto-follow" type="checkbox"><span></span><div><strong>Automatically follow titles</strong><small>Navigate when your partner moves to another episode or video. Off is safer.</small></div></label><label class="toggle"><input id="debug-mode" type="checkbox"><span></span><div><strong>Detailed diagnostics</strong><small>Keep more local evidence in downloadable reports.</small></div></label></div></section>
+    <section class="card privacy"><h2>What Cwtch does not do</h2><div class="facts"><p><strong>No video relay.</strong> The extension never captures, decrypts, uploads, or rebroadcasts streaming content.</p><p><strong>No readable room traffic.</strong> Chat, moments, reactions, and playback events use the secret inside the invite link.</p><p><strong>No account database.</strong> Your display name and device identity stay in Chrome storage.</p></div></section>
+    <footer><button id="save" class="primary">Save settings</button><button id="reset" class="secondary">Restore defaults</button><span id="saved" role="status"></span></footer>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

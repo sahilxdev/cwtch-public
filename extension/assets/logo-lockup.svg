@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 160" role="img" aria-label="Cwtch — watch parties for two">
+  <rect width="520" height="160" rx="26" fill="#FBF5EE"/>
+  <g transform="translate(12 0)">
+    <defs>
+      <linearGradient id="g" x1="18" y1="10" x2="140" y2="150" gradientUnits="userSpaceOnUse"><stop stop-color="#4A263C"/><stop offset="1" stop-color="#1D1019"/></linearGradient>
+      <linearGradient id="e" x1="30" y1="26" x2="132" y2="136" gradientUnits="userSpaceOnUse"><stop stop-color="#F1C3B8"/><stop offset=".48" stop-color="#DE8D8E"/><stop offset="1" stop-color="#B75B69"/></linearGradient>
+    </defs>
+    <rect x="5" y="5" width="150" height="150" rx="42" fill="url(#g)"/>
+    <g fill="none" stroke="url(#e)" stroke-linecap="round"><path d="M111 39A55 55 0 1 0 111 121" stroke-width="17"/><path d="M112 39l12-6M114 43l14-1M112 121l12 6M114 117l14 1" stroke-width="4.7"/></g>
+    <path d="M69 58.5c0-5 5.5-8 9.7-5.3l31.2 20.5c4.1 2.7 4.1 8.9 0 11.6L78.7 105.8c-4.2 2.7-9.7-.3-9.7-5.3z" fill="#F4D0C5"/>
+  </g>
+  <text x="190" y="83" fill="#3B1F32" font-family="Georgia, 'Times New Roman', serif" font-size="64">Cwtch</text>
+  <text x="194" y="116" fill="#C56A6F" font-family="Arial, sans-serif" font-size="18" letter-spacing="1.1">WATCH PARTIES FOR TWO</text>
+</svg>

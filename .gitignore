@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+*.log
+*.zip
+*.crx
+*.pem
+*.key
+*.p12
+*.pfx
+diagnostics*.json
+.DS_Store
+Thumbs.db
