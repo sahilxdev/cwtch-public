@@ -7,7 +7,7 @@
   const text = (value, max) => typeof value === 'string' && value.length <= max;
   const finite = (value, min, max) => Number.isFinite(value) && value >= min && value <= max;
   const defaults = Object.freeze({
-    relayUrl: 'ws://localhost:8787/ws',
+    relayUrl: 'wss://cwtch-relay.onrender.com/ws',
     displayName: '',
     autoOpenPanel: true,
     debugMode: false,
