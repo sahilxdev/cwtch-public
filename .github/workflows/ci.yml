@@ -1,0 +1,29 @@
+name: Verify Cwtch
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm ci --prefix relay --ignore-scripts
+      - run: npm run check && npm run lint && npm run format:check && npm test
+      - run: npm audit --prefix relay --omit=dev --audit-level=high
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f relay/Dockerfile -t cwtch-relay .

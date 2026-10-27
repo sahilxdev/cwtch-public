@@ -2,15 +2,10 @@
   "manifest_version": 3,
   "name": "Cwtch \u2014 Watch parties for two",
   "short_name": "Cwtch",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Private, encrypted watch parties for couples on Netflix, Prime Video, and YouTube.",
-  "minimum_chrome_version": "116",
-  "permissions": [
-    "storage",
-    "activeTab",
-    "clipboardWrite",
-    "scripting"
-  ],
+  "minimum_chrome_version": "124",
+  "permissions": ["storage", "activeTab", "clipboardWrite", "scripting"],
   "host_permissions": [
     "https://www.netflix.com/*",
     "https://*.netflix.com/*",
@@ -42,13 +37,8 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://www.netflix.com/*",
-        "https://*.netflix.com/*"
-      ],
-      "js": [
-        "content/netflix-main-bridge.js"
-      ],
+      "matches": ["https://www.netflix.com/*", "https://*.netflix.com/*"],
+      "js": ["content/netflix-main-bridge.js"],
       "run_at": "document_start",
       "all_frames": false,
       "world": "MAIN"
@@ -64,6 +54,7 @@
         "https://*.youtube.com/*"
       ],
       "js": [
+        "shared/protocol.js",
         "content/namespace.js",
         "content/constants.js",
         "content/utils.js",
@@ -81,9 +72,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": [
-        "assets/logo.svg"
-      ],
+      "resources": ["assets/logo.svg"],
       "matches": [
         "https://www.netflix.com/*",
         "https://*.netflix.com/*",

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Cwtch interface checks</title>
+    <style>
+      body {
+        margin: 24px;
+        font:
+          14px -apple-system,
+          sans-serif;
+        background: #f5f5f7;
+        color: #202024;
+      }
+      button {
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px solid #aaa;
+        background: white;
+      }
+      iframe {
+        border: 1px solid #ddd;
+        width: 380px;
+        height: 850px;
+        display: inline-block;
+        vertical-align: top;
+        border-radius: 16px;
+      }
+      #results {
+        white-space: pre-wrap;
+        margin: 16px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Popup and settings checks</h1>
+    <button id="run">Run interface checks</button>
+    <div id="results" role="status">Ready</div>
+    <iframe title="Popup" id="popup" src="/extension/popup/popup.html?fixture=1"></iframe
+    ><iframe title="Settings" id="options" src="/extension/options/options.html?fixture=1"></iframe>
+    <script>
+      const output = document.getElementById('results'),
+        popup = document.getElementById('popup'),
+        options = document.getElementById('options');
+      const wait = async (fn) => {
+        let n = 0;
+        while (!fn()) {
+          if (n++ > 100) throw new Error('Timed out');
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      };
+      const check = (condition, label) => {
+        if (!condition) throw new Error(label);
+        output.textContent += '\n✓ ' + label;
+      };
+      document.getElementById('run').onclick = async () => {
+        output.textContent = 'Running…';
+        try {
+          const p = popup.contentDocument,
+            o = options.contentDocument;
+          await wait(() => !p.querySelector('#idle').classList.contains('hidden'));
+          p.querySelector('#display-name').value = 'Sahil';
+          p.querySelector('#create').click();
+          await wait(() => p.querySelector('#toast').textContent.includes('relay is offline'));
+          check(
+            p.querySelector('#active').classList.contains('hidden'),
+            'Creation failure stays in the setup view',
+          );
+          check(
+            !p.querySelector('#toast').textContent.includes('Room created'),
+            'Creation failure never claims success',
+          );
+          o.querySelector('#display-name').value = 'Sahil';
+          o.querySelector('#save').click();
+          await wait(() => o.querySelector('#saved').textContent === 'Saved.');
+          check(
+            (await options.contentWindow.chrome.storage.local.get('settings')).settings
+              .displayName === 'Sahil',
+            'Settings persist',
+          );
+          o.querySelector('#relay-url').value = 'ws://example.com/ws';
+          o.querySelector('#save').click();
+          await wait(() => o.querySelector('#saved').textContent.includes('wss://'));
+          check(true, 'Insecure public relay rejected');
+          for (const width of [320, 380]) {
+            popup.style.width = width + 'px';
+            options.style.width = width + 'px';
+            await new Promise((r) => requestAnimationFrame(r));
+            check(p.documentElement.scrollWidth <= width, 'Popup fits ' + width + 'px');
+            check(o.documentElement.scrollWidth <= width, 'Settings fit ' + width + 'px');
+          }
+          popup.style.width = '380px';
+          options.style.width = '380px';
+          output.textContent += '\nALL INTERFACE CHECKS PASSED';
+        } catch (error) {
+          output.textContent += '\nFAILED: ' + error.message;
+        }
+      };
+    </script>
+  </body>
+</html>

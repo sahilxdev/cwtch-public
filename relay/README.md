@@ -1,6 +1,11 @@
-# Cwtch relay container
+# Cwtch relay
 
-Build from this directory or set this directory as your container build context.
-The image listens on `0.0.0.0:$PORT` (default `8787`) and exposes `/health`.
-It requires no credentials. Configure the environment variables documented in
-`../README.md` when deploying.
+Run `npm ci && npm start` here, or use `npm ci --prefix relay && npm start` from the repository root.
+
+The Dockerfile requires the **repository root** as build context because the relay imports the shared protocol from `extension/shared/`:
+
+```sh
+docker build -f relay/Dockerfile -t cwtch-relay .
+```
+
+See the root README and `docs/OPERATIONS.md` for TLS, origins, limits, monitoring, and deployment acceptance.

@@ -1,359 +1,341 @@
 (() => {
-  "use strict";
+  'use strict';
   const C = globalThis.Cwtch;
-
   class RoomClient extends EventTarget {
     constructor({ bundle, identity, diagnostics }) {
       super();
-      this.bundle = bundle;
-      this.identity = identity;
-      this.diagnostics = diagnostics;
+      Object.assign(this, { bundle, identity, diagnostics });
       this.crypto = new C.RoomCrypto(bundle.secret, bundle.roomId);
       this.port = null;
-      this.status = "idle";
+      this.status = 'idle';
       this.connected = false;
-      this.manualClose = false;
       this.joined = false;
+      this.manualClose = false;
       this.seq = 0;
-      this.queue = [];
-      this.portReconnectTimer = null;
-      this.pingTimer = null;
       this.sessionId = C.utils.randomId(18);
+      this.members = [];
+      this.leaderId = null;
       this.latencyMs = null;
       this.serverOffsetMs = 0;
       this.offsetSamples = [];
       this.pendingPings = new Map();
       this.lastMessageAt = null;
       this.lastSeqBySession = new Map();
-      this.connectionFailureCode = null;
+      this.pending = new Map();
+      this.seen = new Set();
+      this.sendChain = Promise.resolve();
+      this.receiveChain = Promise.resolve();
+      this.generation = 0;
+      this.portAttempts = 0;
     }
-
     setStatus(status, detail = {}) {
       this.status = status;
-      C.utils.emit(this, "status", { status, ...detail });
+      C.utils.emit(this, 'status', { ...detail, status });
     }
-
     validateRelayUrl() {
-      let url;
-      try { url = new URL(this.bundle.relayUrl); }
-      catch { throw new Error("Relay URL is not valid."); }
-      if (!['ws:', 'wss:'].includes(url.protocol)) throw new Error("Relay URL must start with ws:// or wss://.");
-      const isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-      if (url.protocol === "ws:" && !isLoopback) throw new Error("Public relays must use wss://.");
-      if (url.username || url.password) throw new Error("Relay URLs cannot contain usernames or passwords.");
-      return url.toString();
+      return CwtchProtocol.relayUrl(this.bundle.relayUrl);
     }
-
-    connect() {
-      this.manualClose = false;
-      let relayUrl;
-      try { relayUrl = this.validateRelayUrl(); }
-      catch (error) {
-        this.diagnostics.record("WS_CONFIG_INVALID", "error", { message: error.message, relayUrl: this.bundle.relayUrl });
-        this.setStatus("error", { code: "WS_CONFIG_INVALID", message: error.message });
-        return;
-      }
-
-      if (this.port) return;
-      this.setStatus("connecting");
+    async connect() {
+      if (this.port || this.manualClose) return;
+      const generation = ++this.generation;
+      this.setStatus('connecting');
       try {
-        this.port = chrome.runtime.connect({ name: "cwtch-room" });
-      } catch (error) {
-        this.handlePortFailure(error);
-        return;
-      }
-
-      this.port.onMessage.addListener((message) => this.handlePortMessage(message));
-      this.port.onDisconnect.addListener(() => {
-        const error = chrome.runtime.lastError;
-        this.port = null;
-        this.connected = false;
-        this.joined = false;
-        this.diagnostics.metric("connected", false);
-        this.stopPings();
-        if (!this.manualClose) {
-          if (error) this.diagnostics.record("EXTENSION_CONTEXT_INVALIDATED", "warning", { message: error.message });
-          this.schedulePortReconnect();
-        }
-      });
-
-      this.port.postMessage({
-        type: "socket-connect",
-        relayUrl,
-        joinPayload: {
-          v: C.PROTOCOL_VERSION,
-          type: "join",
-          roomId: this.bundle.roomId,
-          clientId: this.identity.id,
-          sessionId: this.sessionId
-        }
-      });
-    }
-
-    handlePortFailure(error) {
-      this.diagnostics.record("EXTENSION_CONTEXT_INVALIDATED", "error", { message: error.message });
-      this.setStatus("error", { code: "EXTENSION_CONTEXT_INVALIDATED", message: error.message });
-      this.schedulePortReconnect();
-    }
-
-    schedulePortReconnect() {
-      if (this.manualClose) return;
-      this.setStatus("reconnecting");
-      clearTimeout(this.portReconnectTimer);
-      this.portReconnectTimer = setTimeout(() => this.connect(), 1200);
-    }
-
-    handlePortMessage(message) {
-      if (!message || typeof message !== "object") return;
-      if (message.type === "socket-open") {
-        this.connected = true;
-        this.connectionFailureCode = null;
-        this.diagnostics.metric("connected", true);
-        return;
-      }
-      if (message.type === "socket-status") {
-        if (message.status === "reconnecting" && this.connectionFailureCode) {
-          this.setStatus("error", { ...message, code: this.connectionFailureCode, retrying: true });
-        } else {
-          this.setStatus(message.status, message);
-        }
-        return;
-      }
-      if (message.type === "socket-error") {
-        let isLoopback = false;
-        try {
-          const url = new URL(this.bundle.relayUrl);
-          isLoopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-        } catch {}
-        const code = message.code === "WS_CONFIG_INVALID"
-          ? "WS_CONFIG_INVALID"
-          : isLoopback ? "LOCAL_RELAY_NOT_RUNNING" : "WS_CONNECT_FAILED";
-        this.connectionFailureCode = code;
-        this.diagnostics.record(code, "error", { message: message.message, relayHost: isLoopback ? "loopback" : "remote" });
-        this.setStatus("error", { ...message, code, retrying: message.code !== "WS_CONFIG_INVALID" });
-        return;
-      }
-      if (message.type === "socket-close") {
-        this.connected = false;
-        this.joined = false;
-        this.diagnostics.metric("connected", false);
-        this.stopPings();
-        C.utils.emit(this, "closed", { code: message.code, reason: message.reason });
-        if (message.code === 4009) {
-          this.manualClose = true;
-          this.diagnostics.record("DUPLICATE_SESSION", "error", { code: message.code });
-          this.setStatus("error", { code: "DUPLICATE_SESSION" });
-        } else if (message.code === 4003) {
-          this.manualClose = true;
-          this.diagnostics.record("ROOM_FULL", "error", { code: message.code });
-          this.setStatus("error", { code: "ROOM_FULL" });
-        }
-        return;
-      }
-      if (message.type === "socket-message") {
-        this.handleMessage(message.data).catch((error) => {
-          this.diagnostics.record("INTERNAL_ERROR", "error", {
-            stage: "room-message",
-            message: error?.message || String(error)
-          });
+        const relayUrl = this.validateRelayUrl(),
+          auth = await this.crypto.auth();
+        if (generation !== this.generation || this.manualClose) return;
+        const port = chrome.runtime.connect({ name: 'cwtch-room' });
+        this.port = port;
+        port.onMessage.addListener((m) => {
+          if (this.port === port) this.handlePortMessage(m);
         });
+        port.onDisconnect.addListener(() => {
+          const error = chrome.runtime.lastError;
+          if (this.port !== port) return;
+          this.port = null;
+          this.disconnected();
+          if (!this.manualClose && this.portAttempts++ < 12) {
+            this.setStatus('reconnecting');
+            this.portReconnectTimer = setTimeout(
+              () => this.connect(),
+              Math.min(30000, 1000 * 2 ** this.portAttempts),
+            );
+          } else if (!this.manualClose)
+            this.setStatus('error', { message: error?.message || 'Reload this tab to reconnect.' });
+        });
+        port.postMessage({
+          type: 'socket-connect',
+          relayUrl,
+          joinPayload: {
+            v: C.PROTOCOL_VERSION,
+            type: 'join',
+            roomId: this.bundle.roomId,
+            clientId: this.identity.id,
+            sessionId: this.sessionId,
+            auth,
+          },
+        });
+      } catch (error) {
+        this.diagnostics.record('WS_CONFIG_INVALID', 'error', { message: error.message });
+        this.setStatus('error');
       }
     }
-
-    retryNow() {
-      if (this.manualClose) return false;
-      clearTimeout(this.portReconnectTimer);
-      this.connectionFailureCode = null;
-      try { this.port?.postMessage({ type: "socket-close" }); } catch {}
-      try { this.port?.disconnect(); } catch {}
-      this.port = null;
+    disconnected() {
+      this.generation++;
       this.connected = false;
       this.joined = false;
-      this.setStatus("connecting", { manualRetry: true });
-      this.connect();
-      return true;
+      this.members = [];
+      this.leaderId = null;
+      this.diagnostics.metric('connected', false);
+      this.stopPings();
+      for (const id of this.pending.keys()) this.finishDelivery(id, 'unconfirmed');
+      C.utils.emit(this, 'membership', { members: [], leaderId: null });
     }
-
+    handlePortMessage(m) {
+      if (!m || typeof m !== 'object') return;
+      if (m.type === 'socket-open') {
+        this.connected = true;
+        this.diagnostics.metric('connected', true);
+      }
+      if (m.type === 'socket-status') this.setStatus(m.status);
+      if (m.type === 'socket-error') {
+        const local = ['localhost', '127.0.0.1', '[::1]'].includes(
+          new URL(this.bundle.relayUrl).hostname,
+        );
+        this.diagnostics.record(local ? 'LOCAL_RELAY_NOT_RUNNING' : 'WS_CONNECT_FAILED', 'error', {
+          message: m.message,
+        });
+        this.setStatus('error', { message: m.message });
+      }
+      if (m.type === 'socket-close') {
+        this.disconnected();
+        C.utils.emit(this, 'closed', m);
+        const terminal = {
+          4002: 'WS_PROTOCOL_MISMATCH',
+          4003: 'ROOM_FULL',
+          4004: 'ROOM_SECRET_INVALID',
+          4008: 'INVITE_EXPIRED',
+          4009: 'DUPLICATE_SESSION',
+        }[m.code];
+        if (terminal) {
+          this.manualClose = true;
+          this.diagnostics.record(terminal, 'error', { reason: m.reason });
+          this.setStatus('error');
+        }
+      }
+      if (m.type === 'socket-message') {
+        const generation = this.generation;
+        this.receiveChain = this.receiveChain
+          .then(() => generation === this.generation && this.handleMessage(m.data))
+          .catch((error) =>
+            this.diagnostics.record('DECRYPT_FAILED', 'error', { message: error.message }),
+          );
+      }
+    }
+    membership(m) {
+      if (
+        !Array.isArray(m.members) ||
+        m.members.length > 2 ||
+        !m.members.every((id) => CwtchProtocol.ID.test(id))
+      )
+        throw new Error('Invalid membership.');
+      this.members = m.members;
+      this.leaderId = m.leaderId;
+      C.utils.emit(this, 'membership', { members: this.members, leaderId: this.leaderId });
+    }
     async handleMessage(raw) {
+      const m = JSON.parse(raw);
       this.lastMessageAt = Date.now();
-      let message;
-      try { message = JSON.parse(raw); }
-      catch {
-        this.diagnostics.record("WS_PROTOCOL_MISMATCH", "error", { rawType: typeof raw });
-        return;
-      }
-
-      if (message.v !== C.PROTOCOL_VERSION) {
-        this.diagnostics.record("WS_PROTOCOL_MISMATCH", "error", { received: message.v, expected: C.PROTOCOL_VERSION });
-        return;
-      }
-
-      if (message.type === "joined") {
+      if (m.v !== C.PROTOCOL_VERSION)
+        throw new Error('Protocol mismatch. Update both extensions and relay.');
+      if (m.type === 'joined') {
         this.joined = true;
-        this.setStatus("joined", { occupants: message.occupants, replaced: message.replaced });
-        this.sampleOffset(Date.now(), Date.now(), message.serverTime);
+        this.portAttempts = 0;
+        this.membership(m);
+        this.setStatus('joined');
         this.startPings();
-        this.flushQueue();
-        C.utils.emit(this, "joined", message);
+        C.utils.emit(this, 'joined', m);
         return;
       }
-
-      if (message.type === "peer_joined" || message.type === "peer_left") {
-        C.utils.emit(this, message.type, message);
+      if (m.type === 'peer_joined' || m.type === 'peer_left') {
+        this.membership(m);
+        C.utils.emit(this, m.type, m);
         return;
       }
-
-      if (message.type === "pong") {
-        const started = this.pendingPings.get(message.nonce);
+      if (m.type === 'pong') {
+        const started = this.pendingPings.get(m.nonce);
         if (started != null) {
-          this.pendingPings.delete(message.nonce);
-          this.sampleOffset(started, Date.now(), message.serverTime);
+          this.pendingPings.delete(m.nonce);
+          this.sampleOffset(started, Date.now(), m.serverTime);
         }
         return;
       }
-
-      if (message.type === "error") {
-        const map = {
-          ROOM_FULL: "ROOM_FULL",
-          RATE_LIMITED: "RATE_LIMITED",
-          PROTOCOL_MISMATCH: "WS_PROTOCOL_MISMATCH",
-          INVALID_ROOM_ID: "ROOM_ID_INVALID"
-        };
-        const diagnosticCode = map[message.code] || "INTERNAL_ERROR";
-        this.diagnostics.record(diagnosticCode, "error", { serverCode: message.code, serverMessage: message.message });
-        this.setStatus("error", { code: message.code, message: message.message });
-        if (["ROOM_FULL", "PROTOCOL_MISMATCH", "INVALID_ROOM_ID"].includes(message.code)) this.manualClose = true;
-        C.utils.emit(this, "server_error", message);
+      if (m.type === 'error') {
+        this.diagnostics.record(
+          m.code === 'AUTH_FAILED'
+            ? 'ROOM_SECRET_INVALID'
+            : m.code === 'ROOM_FULL'
+              ? 'ROOM_FULL'
+              : m.code === 'RATE_LIMITED'
+                ? 'RATE_LIMITED'
+                : 'WS_PROTOCOL_MISMATCH',
+          'error',
+          { serverCode: m.code },
+        );
+        this.setStatus('error', { code: m.code, message: m.message });
+        C.utils.emit(this, 'server_error', m);
         return;
       }
-
-      if (message.type === "relay") {
-        try {
-          const sequenceKey = `${message.senderId}:${message.sessionId || "legacy"}`;
-          const previousSeq = this.lastSeqBySession.get(sequenceKey);
-          if (Number.isSafeInteger(previousSeq) && message.seq <= previousSeq) return;
-          const payload = await this.crypto.decrypt(message.payload);
-          this.lastSeqBySession.set(sequenceKey, message.seq);
-          if (this.lastSeqBySession.size > 8) this.lastSeqBySession.delete(this.lastSeqBySession.keys().next().value);
-          C.utils.emit(this, "payload", {
-            senderId: message.senderId,
-            seq: message.seq,
-            serverTime: message.serverTime,
-            payload
-          });
-        } catch (error) {
-          this.diagnostics.record("DECRYPT_FAILED", "error", { message: error.message, senderId: message.senderId });
-        }
+      if (m.type !== 'relay') return;
+      if (
+        m.roomId !== this.bundle.roomId ||
+        !this.members.includes(m.senderId) ||
+        m.senderId === this.identity.id ||
+        !CwtchProtocol.ID.test(m.sessionId || '') ||
+        !Number.isSafeInteger(m.seq) ||
+        m.seq < 0
+      )
+        throw new Error('Invalid message identity.');
+      const key = `${m.senderId}:${m.sessionId}`,
+        previous = this.lastSeqBySession.get(key) ?? -1;
+      if (m.seq <= previous) return;
+      const generation = this.generation;
+      const payload = await this.crypto.decrypt(m.payload, m);
+      if (generation !== this.generation || !this.joined) return;
+      if (!CwtchProtocol.application(payload) || payload.senderId !== m.senderId)
+        throw new Error('Invalid room message.');
+      this.lastSeqBySession.set(key, m.seq);
+      if (this.lastSeqBySession.size > 16)
+        this.lastSeqBySession.delete(this.lastSeqBySession.keys().next().value);
+      if (payload.type === 'ack') {
+        this.finishDelivery(payload.data.id, 'delivered');
+        return;
       }
-    }
-
-    sampleOffset(startedAt, finishedAt, serverTime) {
-      if (!Number.isFinite(serverTime)) return;
-      const midpoint = startedAt + (finishedAt - startedAt) / 2;
-      const offset = serverTime - midpoint;
-      const latency = Math.max(0, finishedAt - startedAt);
-      this.offsetSamples.push({ offset, latency });
-      if (this.offsetSamples.length > 8) this.offsetSamples.shift();
-      const sorted = [...this.offsetSamples].sort((a, b) => a.latency - b.latency);
-      const best = sorted.slice(0, Math.max(1, Math.ceil(sorted.length / 2)));
-      this.serverOffsetMs = best.reduce((sum, sample) => sum + sample.offset, 0) / best.length;
-      this.latencyMs = best.reduce((sum, sample) => sum + sample.latency, 0) / best.length;
-      this.diagnostics.metric("latencyMs", Math.round(this.latencyMs));
-      this.diagnostics.metric("serverOffsetMs", Math.round(this.serverOffsetMs));
-      if (Math.abs(this.serverOffsetMs) > 120_000) {
-        this.diagnostics.record("CLOCK_SKEW", "warning", { serverOffsetMs: Math.round(this.serverOffsetMs) });
+      const age = this.serverNow() - payload.sentServerTime;
+      if (age > 15000 && ['sync-state', 'reaction', 'nudge', 'navigation'].includes(payload.type))
+        return;
+      if (['chat', 'moment'].includes(payload.type)) {
+        await this.send('ack', { id: payload.data.id });
+        if (this.seen.has(payload.data.id)) return;
+        this.seen.add(payload.data.id);
+        if (this.seen.size > 300) this.seen.delete(this.seen.values().next().value);
       }
-      C.utils.emit(this, "quality", { latencyMs: this.latencyMs, serverOffsetMs: this.serverOffsetMs });
+      C.utils.emit(this, 'payload', { senderId: m.senderId, payload, seq: m.seq });
     }
-
+    sampleOffset(start, finish, server) {
+      if (!Number.isFinite(server)) return;
+      this.offsetSamples.push({ offset: server - (start + finish) / 2, latency: finish - start });
+      this.offsetSamples = this.offsetSamples.slice(-8);
+      const best = [...this.offsetSamples].sort((a, b) => a.latency - b.latency).slice(0, 4);
+      this.serverOffsetMs = best.reduce((s, x) => s + x.offset, 0) / best.length;
+      this.latencyMs = best.reduce((s, x) => s + x.latency, 0) / best.length;
+      this.diagnostics.metric('latencyMs', Math.round(this.latencyMs));
+      C.utils.emit(this, 'quality', { latencyMs: this.latencyMs });
+    }
     serverNow() {
       return Date.now() + this.serverOffsetMs;
     }
-
     startPings() {
       this.stopPings();
       const ping = () => {
         if (!this.joined) return;
-        const nonce = C.utils.randomId(8);
-        const clientTime = Date.now();
-        this.pendingPings.set(nonce, clientTime);
-        this.sendRaw({ v: C.PROTOCOL_VERSION, type: "ping", nonce, clientTime });
-        for (const [key, started] of this.pendingPings) {
-          if (Date.now() - started > 30_000) this.pendingPings.delete(key);
+        if (this.lastMessageAt && Date.now() - this.lastMessageAt > 45000) {
+          this.retryNow();
+          return;
         }
+        const nonce = C.utils.randomId(8),
+          now = Date.now();
+        this.pendingPings.set(nonce, now);
+        this.sendRaw({ v: C.PROTOCOL_VERSION, type: 'ping', nonce, clientTime: now });
+        for (const [id, time] of this.pendingPings)
+          if (now - time > 30000) this.pendingPings.delete(id);
       };
       ping();
-      this.pingTimer = setInterval(ping, 15_000);
+      this.pingTimer = setInterval(ping, 15000);
     }
-
     stopPings() {
       clearInterval(this.pingTimer);
-      this.pingTimer = null;
       this.pendingPings.clear();
     }
-
     sendRaw(value) {
-      if (!this.port) return false;
+      if (!this.port || !this.connected) return false;
       try {
-        this.port.postMessage({ type: "socket-send", data: JSON.stringify(value) });
+        this.port.postMessage({ type: 'socket-send', data: JSON.stringify(value) });
         return true;
-      } catch (error) {
-        this.diagnostics.record("EXTENSION_CONTEXT_INVALIDATED", "warning", { message: error.message });
+      } catch {
         return false;
       }
     }
-
-    async send(type, data = {}) {
-      const applicationMessage = {
-        type,
-        data,
-        senderId: this.identity.id,
-        sentServerTime: this.serverNow(),
-        clientVersion: C.APP_VERSION
-      };
-      const payload = await this.crypto.encrypt(applicationMessage);
-      const envelope = {
-        v: C.PROTOCOL_VERSION,
-        type: "relay",
-        roomId: this.bundle.roomId,
-        senderId: this.identity.id,
-        sessionId: this.sessionId,
-        seq: this.seq++,
-        payload
-      };
-      if (!this.joined || !this.sendRaw(envelope)) {
-        this.queue.push(envelope);
-        if (this.queue.length > 30) this.queue.shift();
+    send(type, data = {}) {
+      const generation = this.generation;
+      const operation = this.sendChain.then(async () => {
+        if (!this.joined || generation !== this.generation) return false;
+        const message = {
+          type,
+          data,
+          senderId: this.identity.id,
+          sentServerTime: this.serverNow(),
+          clientVersion: C.APP_VERSION,
+        };
+        if (!CwtchProtocol.application(message)) throw new Error(`Invalid ${type} message.`);
+        const envelope = {
+          v: C.PROTOCOL_VERSION,
+          type: 'relay',
+          roomId: this.bundle.roomId,
+          senderId: this.identity.id,
+          sessionId: this.sessionId,
+          seq: this.seq++,
+        };
+        envelope.payload = await this.crypto.encrypt(message, envelope);
+        if (!this.joined || generation !== this.generation) return false;
+        if (['chat', 'moment'].includes(type)) {
+          if (this.pending.size >= 30) return false;
+          this.pending.set(
+            data.id,
+            setTimeout(() => this.finishDelivery(data.id, 'unconfirmed'), 10000),
+          );
+          C.utils.emit(this, 'delivery', { id: data.id, status: 'sending' });
+        }
+        const sent = this.sendRaw(envelope);
+        if (!sent) this.finishDelivery(data.id, 'unconfirmed');
+        return sent;
+      });
+      this.sendChain = operation.catch(() => {});
+      return operation;
+    }
+    finishDelivery(id, status) {
+      if (!this.pending.has(id)) return;
+      clearTimeout(this.pending.get(id));
+      this.pending.delete(id);
+      C.utils.emit(this, 'delivery', { id, status });
+    }
+    retryNow() {
+      if (this.bundle.expiresAt < Date.now()) {
+        this.diagnostics.record('INVITE_EXPIRED', 'error');
         return false;
       }
+      this.manualClose = false;
+      this.closePort();
+      this.portAttempts = 0;
+      this.connect();
       return true;
     }
-
-    flushQueue() {
-      const queue = this.queue.splice(0);
-      for (let index = 0; index < queue.length; index += 1) {
-        if (!this.sendRaw(queue[index])) {
-          this.queue.unshift(...queue.slice(index));
-          break;
-        }
-      }
+    closePort() {
+      this.generation++;
+      clearTimeout(this.portReconnectTimer);
+      const port = this.port;
+      this.port = null;
+      try {
+        port?.postMessage({ type: 'socket-close' });
+        port?.disconnect();
+      } catch {}
+      this.disconnected();
     }
-
     close() {
       this.manualClose = true;
-      clearTimeout(this.portReconnectTimer);
-      this.stopPings();
-      this.queue.length = 0;
+      this.closePort();
       this.lastSeqBySession.clear();
-      this.connectionFailureCode = null;
-      try { this.port?.postMessage({ type: "socket-close" }); } catch {}
-      try { this.port?.disconnect(); } catch {}
-      this.port = null;
-      this.connected = false;
-      this.joined = false;
-      this.setStatus("closed");
+      this.setStatus('closed');
     }
   }
-
   C.RoomClient = RoomClient;
 })();

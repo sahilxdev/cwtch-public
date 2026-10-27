@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>The quiet between · Cwtch test player</title>
+    <style>
+      body {
+        margin: 0;
+        background: #141416;
+        color: #f5f5f7;
+        font:
+          16px -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+      }
+      main {
+        padding: 48px;
+      }
+      h1 {
+        font-size: 36px;
+        font-weight: 500;
+      }
+      p {
+        color: #b5b5c0;
+      }
+      video {
+        width: 560px;
+        height: 315px;
+        background: #242428;
+        border-radius: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p>CWTCH · SIMULATED PLAYER</p>
+      <h1>The quiet between</h1>
+      <p>Two browsers. One evening.</p>
+      <video></video>
+    </main>
+    <script src="chrome-mock.js"></script>
+    <script src="/extension/shared/protocol.js"></script>
+    <script src="/extension/content/namespace.js"></script>
+    <script src="/extension/content/constants.js"></script>
+    <script src="/extension/content/utils.js"></script>
+    <script src="/extension/content/diagnostics.js"></script>
+    <script src="/extension/content/crypto.js"></script>
+    <script src="/extension/content/room-client.js"></script>
+    <script src="/extension/content/sync-engine.js"></script>
+    <script src="/extension/content/ui.js"></script>
+    <script>
+      const media = document.querySelector('video');
+      let time = 12,
+        paused = true,
+        rate = 1;
+      Object.defineProperties(media, {
+        currentTime: {
+          get: () => time,
+          set: (v) => {
+            time = v;
+            queueMicrotask(() => media.dispatchEvent(new Event('seeked')));
+          },
+        },
+        duration: { get: () => 300 },
+        readyState: { get: () => 4 },
+        paused: { get: () => paused },
+        playbackRate: {
+          get: () => rate,
+          set: (v) => {
+            rate = v;
+            queueMicrotask(() => media.dispatchEvent(new Event('ratechange')));
+          },
+        },
+        seekable: { get: () => ({ length: 1, start: () => 0, end: () => 300 }) },
+      });
+      media.play = async () => {
+        paused = false;
+        media.dispatchEvent(new Event('play'));
+      };
+      media.pause = () => {
+        paused = true;
+        media.dispatchEvent(new Event('pause'));
+      };
+      Cwtch.platform = {
+        id: 'youtube',
+        name: 'YouTube',
+        supported: true,
+        supportsRateSync: true,
+        isWatchPage: () => true,
+        findVideo: () => media,
+        getContentKey: () => 'youtube:abcdef12345',
+        getContentUrl: () => 'https://www.youtube.com/watch?v=abcdef12345',
+        getTitle: () => 'The quiet between',
+        isAdActive: () => false,
+        seek: async (m, t) => {
+          m.currentTime = t;
+        },
+        play: (m) => m.play(),
+        pause: (m) => m.pause(),
+      };
+    </script>
+    <script src="/extension/content/main.js"></script>
+  </body>
+</html>

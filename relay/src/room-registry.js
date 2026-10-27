@@ -1,81 +1,95 @@
+import { timingSafeEqual } from 'node:crypto';
 export class RoomRegistry {
-  constructor({ maxOccupants = 2, idleTtlMs = 6 * 60 * 60 * 1000 } = {}) {
+  constructor({ maxOccupants = 2, idleTtlMs = 21600000 } = {}) {
     this.maxOccupants = maxOccupants;
     this.idleTtlMs = idleTtlMs;
     this.rooms = new Map();
   }
-
-  join(roomId, clientId, connection, now = Date.now()) {
+  join(roomId, clientId, connection, now = Date.now(), auth = '') {
     let room = this.rooms.get(roomId);
+    if (
+      room &&
+      (room.auth.length !== auth.length ||
+        !timingSafeEqual(Buffer.from(room.auth), Buffer.from(auth)))
+    )
+      return { ok: false, code: 'AUTH_FAILED' };
     if (!room) {
-      room = { id: roomId, clients: new Map(), createdAt: now, touchedAt: now };
+      room = { id: roomId, auth, clients: new Map(), createdAt: now, touchedAt: now };
       this.rooms.set(roomId, room);
     }
-
     const previous = room.clients.get(clientId);
-    if (!previous && room.clients.size >= this.maxOccupants) {
-      return { ok: false, code: "ROOM_FULL", occupants: room.clients.size };
-    }
-
-    if (previous && previous !== connection) {
-      try { previous.close(4009, "DUPLICATE_SESSION"); } catch {}
-    }
-
+    if (!previous && room.clients.size >= this.maxOccupants)
+      return { ok: false, code: 'ROOM_FULL' };
     room.clients.set(clientId, connection);
     room.touchedAt = now;
+    if (previous && previous !== connection) {
+      try {
+        previous.close(4009, 'DUPLICATE_SESSION');
+      } catch {}
+    }
     return {
       ok: true,
       replaced: Boolean(previous && previous !== connection),
-      occupants: room.clients.size,
-      createdAt: room.createdAt
+      ...this.membership(roomId),
     };
   }
-
+  isCurrent(roomId, clientId, connection) {
+    return this.rooms.get(roomId)?.clients.get(clientId) === connection;
+  }
+  touch(roomId, now = Date.now()) {
+    const room = this.rooms.get(roomId);
+    if (room) room.touchedAt = now;
+  }
+  membership(roomId) {
+    const members = [...(this.rooms.get(roomId)?.clients.keys() || [])];
+    return { occupants: members.length, members, leaderId: members[0] || null };
+  }
   leave(roomId, clientId, connection, now = Date.now()) {
     const room = this.rooms.get(roomId);
-    if (!room) return 0;
-    if (room.clients.get(clientId) === connection) room.clients.delete(clientId);
+    if (!room || room.clients.get(clientId) !== connection) return false;
+    room.clients.delete(clientId);
     room.touchedAt = now;
-    if (room.clients.size === 0) this.rooms.delete(roomId);
-    return room.clients.size;
+    if (!room.clients.size) this.rooms.delete(roomId);
+    return true;
   }
-
   relay(roomId, senderId, serializedMessage, now = Date.now()) {
     const room = this.rooms.get(roomId);
     if (!room) return 0;
     room.touchedAt = now;
     let delivered = 0;
-    for (const [clientId, client] of room.clients) {
-      if (clientId === senderId || client.readyState !== 1) continue;
+    for (const [id, client] of room.clients) {
+      if (id === senderId || client.readyState !== 1) continue;
+      if (client.bufferedAmount > 262144) {
+        client.close(4010, 'SLOW_CLIENT');
+        continue;
+      }
       try {
         client.send(serializedMessage);
-        delivered += 1;
+        delivered++;
       } catch {
-        room.clients.delete(clientId);
-        try { client.terminate?.(); } catch {}
+        client.terminate?.();
       }
     }
     return delivered;
   }
-
   occupants(roomId) {
-    return this.rooms.get(roomId)?.clients.size ?? 0;
+    return this.membership(roomId).occupants;
   }
-
   sweep(now = Date.now()) {
     const removed = [];
-    for (const [roomId, room] of this.rooms) {
-      if (room.clients.size === 0 || now - room.touchedAt > this.idleTtlMs) {
+    for (const [id, room] of this.rooms) {
+      if (now - room.touchedAt > this.idleTtlMs) {
+        this.rooms.delete(id);
         for (const client of room.clients.values()) {
-          try { client.close(4008, "ROOM_EXPIRED"); } catch {}
+          try {
+            client.close(4008, 'ROOM_EXPIRED');
+          } catch {}
         }
-        this.rooms.delete(roomId);
-        removed.push(roomId);
+        removed.push(id);
       }
     }
     return removed;
   }
-
   stats() {
     let connections = 0;
     for (const room of this.rooms.values()) connections += room.clients.size;
